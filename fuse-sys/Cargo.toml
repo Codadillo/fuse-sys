@@ -1,0 +1,9 @@
+[package]
+authors = ["Leo Conrad-Shah <singularlymappedtotheownzone@gmail.com>"]
+name = "fuse-sys"
+build = "build.rs"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+bindgen = "*"

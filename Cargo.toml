@@ -1,0 +1,15 @@
+[package]
+authors = ["Leo Conrad-Shah <singularlymappedtotheownzone@gmail.com>"]
+name = "fuse-rs"
+version = "0.1.0"
+edition = "2021"
+autoexamples = true
+
+[workspace]
+members = [
+    "fuse-sys",
+    "filesystem-macro"
+]
+
+[dependencies]
+fuse-sys = { path = "./fuse-sys" }

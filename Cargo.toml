@@ -12,4 +12,5 @@ members = [
 ]
 
 [dependencies]
-fuse-sys = { path = "./fuse-sys" }
+fuse-sys = { path = "./fuse-sys", features = ["derive"] }
+filesystem-macro = { path = "./filesystem-macro" }

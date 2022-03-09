@@ -5,5 +5,11 @@ build = "build.rs"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+filesystem-macro = { path = "../filesystem-macro", optional = true }
+
 [build-dependencies]
 bindgen = "*"
+
+[features]
+derive = ["filesystem-macro"]

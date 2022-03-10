@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use proc_macro::TokenStream;
 
 use quote::quote;
@@ -17,6 +19,7 @@ struct UnsafeFnConvert {
     new_inputs: Punctuated<BareFnArg, Comma>,
     converted_call: Punctuated<Expr, Comma>,
     conversion: Punctuated<Stmt, Semi>,
+    reexport_types: HashSet<String>,
 }
 
 impl UnsafeFnConvert {
@@ -38,6 +41,7 @@ impl UnsafeFnConvert {
     }
 
     fn new(inputs: Punctuated<BareFnArg, Comma>) -> Self {
+        let mut reexport_types = HashSet::new();
         let mut new_inputs = Punctuated::new();
         let mut converted_call = Punctuated::new();
         let mut conversions: Vec<Stmt> = vec![];
@@ -99,6 +103,11 @@ impl UnsafeFnConvert {
                     mutability, elem, ..
                 }) => {
                     let ty = syn::parse(quote!(Option<& #mutability #elem>).into()).unwrap();
+                    if let Type::Path(path) = *elem {
+                        if let Some(ident) = path.path.get_ident() {
+                            reexport_types.insert(ident.to_string());
+                        }
+                    }
 
                     let ref_from: Ident = syn::parse(
                         if mutability.is_none() {
@@ -110,9 +119,10 @@ impl UnsafeFnConvert {
                     )
                     .unwrap();
 
-                    conversions
-                        .push(syn::parse(quote!(let #ident = #ident . #ref_from ();).into()).unwrap());
-    
+                    conversions.push(
+                        syn::parse(quote!(let #ident = #ident . #ref_from ();).into()).unwrap(),
+                    );
+
                     ty
                 }
                 ty => ty,
@@ -125,6 +135,7 @@ impl UnsafeFnConvert {
         Self {
             new_inputs,
             converted_call,
+            reexport_types,
             conversion: conversions.into_iter().collect(),
         }
     }
@@ -143,6 +154,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut raw_trait_fns = TokenStream::new();
     let mut trait_fns = TokenStream::new();
     let mut op_assignments: Vec<Stmt> = vec![];
+    let mut all_reexport_types = HashSet::new();
 
     for field in fields {
         let ty_path = match field.ty {
@@ -160,7 +172,6 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
             _ => continue,
         };
 
-        
         let TypeBareFn {
             unsafety,
             abi,
@@ -172,7 +183,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
             GenericArgument::Type(Type::BareFn(ty)) => ty,
             _ => continue,
         };
-        
+
         if variadic.is_some()
             || !matches!(output, ReturnType::Type(_, ty)
                 if is_ident(&ty, "c_int")
@@ -181,13 +192,15 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
             continue;
         }
 
-        
         let name = field.ident.unwrap();
         let UnsafeFnConvert {
             new_inputs,
             converted_call,
+            reexport_types,
             conversion,
         } = UnsafeFnConvert::new(inputs.clone());
+
+        all_reexport_types.extend(reexport_types);
 
         let op_fn: TokenStream = quote! {
             fn #name (&mut self, #new_inputs) -> std::result::Result<(), i32> {
@@ -215,7 +228,10 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
         trait_fns.extend([op_fn]);
         raw_trait_fns.extend([raw_op_fn]);
 
-        op_assignments.push(syn::parse(quote!(operations.#name = Some(<Self as FileSystemRaw>::#name);).into()).unwrap());   
+        op_assignments.push(
+            syn::parse(quote!(operations.#name = Some(<Self as FileSystemRaw>::#name);).into())
+                .unwrap(),
+        );
     }
 
     let op_assignments: Punctuated<Stmt, Semi> = op_assignments.into_iter().collect();
@@ -223,17 +239,17 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
         pub trait FuseMain: FileSystemRaw + 'static {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32>;
         }
-        
+
         impl<F: FileSystemRaw + 'static> FuseMain for F {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32> {
                 let mut operations = crate::fuse_operations::default();
                 #op_assignments
 
                 let mut this = std::boxed::Box::new(self);
-        
+
                 let mut args_owned: std::vec::Vec<_> = fuse_args.into_iter().map(|s| std::ffi::CString::new(*s).unwrap()).collect();
                 let mut args: std::vec::Vec<_> = args_owned.iter_mut().map(|cs| cs.as_ptr()).collect();
-        
+
                 let out = unsafe {
                     crate::fuse_main_real(
                         args.len() as i32,
@@ -243,7 +259,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         this.as_mut() as *mut Self as *mut std::ffi::c_void,
                     )
                 };
-            
+
                 match out {
                     0 => Ok(()),
                     e => Err(e),
@@ -252,8 +268,32 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    for primitive_ident in [
+        "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
+    ] {
+        all_reexport_types.remove(primitive_ident);
+    }
+
+    let reexport_list: Punctuated<Type, Comma> = all_reexport_types
+        .into_iter()
+        .map(|s| syn::parse::<Type>(s.parse().unwrap()).unwrap())
+        .collect();
+    let prelude = quote! {
+        pub mod prelude {
+            pub use crate::{
+                FileSystem,
+                FuseMain,
+                #reexport_list
+            };
+        }
+    };
+
     let traits: TokenStream = format!(
-        "pub trait FileSystem: Sized {{ {trait_fns} }} pub trait FileSystemRaw: FileSystem {{ {raw_trait_fns} }} impl<F: FileSystem> FileSystemRaw for F {{}} {fuse_main}"
+        "pub trait FileSystem: Sized {{ {trait_fns} }} 
+        pub trait FileSystemRaw: FileSystem {{ {raw_trait_fns} }} 
+        impl<F: FileSystem> FileSystemRaw for F {{}}
+        {fuse_main}
+        {prelude}"
     )
     .parse()
     .unwrap();

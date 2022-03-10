@@ -1,6 +1,4 @@
-use filesystem_macro::fuse_main;
-use fuse_rs::*;
-use fuse_sys::{FuseMain, FileSystem, stat};
+use fuse_sys::prelude::*;
 use std::{env, fs, process};
 
 pub struct Passthrough;
@@ -20,5 +18,6 @@ fn main() {
 
     let fs = Passthrough;
 
-    fs.run(&[&env::args().next().unwrap(), &path, "-f", "-s"]).unwrap();
+    fs.run(&[&env::args().next().unwrap(), &path, "-f", "-s"])
+        .unwrap();
 }

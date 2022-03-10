@@ -14,7 +14,7 @@ fn main() {
         .write_to_file(&out)
         .expect("Couldn't write bindings!");
 
-    #[cfg(feature = "derive")]
+    #[cfg(feature = "auto")]
     {
         use std::fs;
 

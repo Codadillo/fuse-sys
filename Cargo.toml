@@ -1,16 +1,21 @@
 [package]
 authors = ["Leo Conrad-Shah <singularlymappedtotheownzone@gmail.com>"]
-name = "fuse-rs"
+name = "fuse-sys"
+build = "build.rs"
 version = "0.1.0"
 edition = "2021"
-autoexamples = true
 
 [workspace]
 members = [
-    "fuse-sys",
     "filesystem-macro"
 ]
 
 [dependencies]
-fuse-sys = { path = "./fuse-sys", features = ["derive"] }
-filesystem-macro = { path = "./filesystem-macro" }
+filesystem-macro = { path = "filesystem-macro", optional = true }
+
+[build-dependencies]
+bindgen = "*"
+
+[features]
+default = ["auto"]
+auto = ["filesystem-macro"]

@@ -217,14 +217,20 @@ fn main() {
     let mount = "/tmp/fsmnt";
     let data = "/tmp/fsdata";
 
-    if matches!(read_dir(&mount), Err(e) if e.kind() == ErrorKind::NotFound) {
-        create_dir(&mount).unwrap();
+    match read_dir(&mount) {
+        Err(e) if e.kind() == ErrorKind::NotFound => create_dir(&mount).unwrap(),
+        r => {
+            r.unwrap();
+        }
     }
-    if matches!(read_dir(&data), Err(e) if e.kind() == ErrorKind::NotFound) {
-        create_dir(&data).unwrap();
+    match read_dir(&data) {
+        Err(e) if e.kind() == ErrorKind::NotFound => create_dir(&data).unwrap(),
+        r => {
+            r.unwrap();
+        }
     }
 
-    println!("Mouning {mount} as mirror of {data}...");
+    println!("Mounting {mount} as mirror of {data}...");
 
     let fs = Passthrough::new(data.to_owned());
 

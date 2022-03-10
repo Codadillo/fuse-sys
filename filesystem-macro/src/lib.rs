@@ -75,7 +75,7 @@ impl UnsafeFnConvert {
 
                     conversions.push(
                         syn::parse(quote!(let #ident = std::slice::#slice_from (#ident as * #const_token #mutability #sub_ty, #size_ident as usize);).into()
-                    ).expect("1"));
+                    ).unwrap());
                     ty
                 }
 
@@ -90,7 +90,7 @@ impl UnsafeFnConvert {
                             quote!(let #ident = std::ffi::CStr::from_ptr(#ident).to_str().unwrap();)
                                 .into(),
                         )
-                        .expect("2"),
+                        .unwrap(),
                     );
                     ty
                 }
@@ -98,7 +98,7 @@ impl UnsafeFnConvert {
                 Type::Ptr(TypePtr {
                     mutability, elem, ..
                 }) => {
-                    let ty = syn::parse(quote!(& #mutability #elem).into()).unwrap();
+                    let ty = syn::parse(quote!(Option<& #mutability #elem>).into()).unwrap();
 
                     let ref_from: Ident = syn::parse(
                         if mutability.is_none() {
@@ -111,15 +111,15 @@ impl UnsafeFnConvert {
                     .unwrap();
 
                     conversions
-                        .push(syn::parse(quote!(let #ident = #ident . #ref_from ().unwrap();).into()).expect("3"));
+                        .push(syn::parse(quote!(let #ident = #ident . #ref_from ();).into()).unwrap());
     
                     ty
                 }
                 ty => ty,
             };
 
-            new_inputs.push(syn::parse(quote!(#ident: #new_ty).into()).expect("new_inputs"));
-            converted_call.push(syn::parse(quote!(#ident).into()).expect("converted_call"));
+            new_inputs.push(syn::parse(quote!(#ident: #new_ty).into()).unwrap());
+            converted_call.push(syn::parse(quote!(#ident).into()).unwrap());
         }
 
         Self {
@@ -142,6 +142,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let mut raw_trait_fns = TokenStream::new();
     let mut trait_fns = TokenStream::new();
+    let mut op_assignments: Vec<Stmt> = vec![];
 
     for field in fields {
         let ty_path = match field.ty {
@@ -190,7 +191,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         let op_fn: TokenStream = quote! {
             fn #name (&mut self, #new_inputs) -> std::result::Result<(), i32> {
-                std::result::Result::Ok(())
+                std::result::Result::Err(-38)
             }
         }
         .into();
@@ -198,7 +199,8 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #unsafety #abi fn #name (#inputs) #output {
                 #conversion
 
-                let out = ((*fuse_get_context()).private_data as *mut Self).as_mut().unwrap().#name (
+                let out = FileSystem::#name(
+                    ((*fuse_get_context()).private_data as *mut Self).as_mut().unwrap(),
                     #converted_call
                 );
 
@@ -212,10 +214,42 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         trait_fns.extend([op_fn]);
         raw_trait_fns.extend([raw_op_fn]);
+
+        op_assignments.push(syn::parse(quote!(operations.#name = Some(<Self as FileSystemRaw>::#name);).into()).unwrap());   
     }
 
+    let op_assignments: Punctuated<Stmt, Semi> = op_assignments.into_iter().collect();
+    let fuse_main = quote! {
+        pub trait FuseMain: FileSystemRaw + 'static {
+            fn run(self, fuse_args: &[&str]) -> Result<(), i32> {
+                let mut operations = crate::fuse_operations::default();
+                #op_assignments
+
+                let mut this = std::boxed::Box::new(self);
+        
+                let mut args_owned: std::vec::Vec<_> = fuse_args.into_iter().map(|s| std::ffi::CString::new(*s).unwrap()).collect();
+                let mut args: std::vec::Vec<_> = args_owned.iter_mut().map(|cs| cs.as_ptr()).collect();
+        
+                let out = unsafe {
+                    crate::fuse_main_real(
+                        args.len() as i32,
+                        args.as_mut_ptr() as *mut *mut std::os::raw::c_char,
+                        &operations as *const crate::fuse_operations,
+                        std::mem::size_of::<crate::fuse_operations>() as crate::size_t,
+                        this.as_mut() as *mut Self as *mut std::ffi::c_void,
+                    )
+                };
+            
+                match out {
+                    0 => Ok(()),
+                    e => Err(e),
+                }
+            }
+        }
+    };
+
     let traits: TokenStream = format!(
-        "pub trait FileSystem: Sized {{ {trait_fns} }} pub trait FileSystemRaw: FileSystem {{ {raw_trait_fns} }}"
+        "pub trait FileSystem: Sized {{ {trait_fns} }} pub trait FileSystemRaw: FileSystem {{ {raw_trait_fns} }} {fuse_main}"
     )
     .parse()
     .unwrap();

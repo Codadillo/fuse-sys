@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use proc_macro::TokenStream;
 
 use quote::quote;
+use proc_macro2::TokenStream as TokenStream2;
 use syn::{
+    parse::Parser,
     parse_macro_input,
     punctuated::Punctuated,
     token::{Comma, Semi},
@@ -150,8 +152,13 @@ impl UnsafeFnConvert {
 }
 
 #[proc_macro_attribute]
-pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut out = item.clone();
+pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let auto_ok = Punctuated::<Ident, Comma>::parse_terminated
+        .parse(attr)
+        .map(|p| p.into_iter().collect::<Vec<_>>())
+        .unwrap();
+
+    let out: TokenStream2 = item.clone().into();
     let tokens = parse_macro_input!(item as ItemStruct);
 
     let fields = match tokens.fields {
@@ -159,22 +166,12 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => unimplemented!(),
     };
 
-    let op_whitelist = [
-        "chmod", "create", "fsync", "getattr", "mkdir", "mknod", "open", "read", "readlink",
-        "readdir", "release", "rename", "rmdir", "statfs", "truncate", "unlink", "utimens",
-        "write",
-    ];
-
-    let mut raw_trait_fns = TokenStream::new();
-    let mut trait_fns = TokenStream::new();
+    let mut raw_trait_fns = TokenStream2::new();
+    let mut trait_fns = TokenStream2::new();
     let mut op_assignments: Vec<Stmt> = vec![];
     let mut all_reexport_types = HashSet::new();
 
     for field in fields {
-        if !op_whitelist.contains(&field.ident.as_ref().unwrap().to_string().as_str()) {
-            continue;
-        }
-
         let ty_path = match field.ty {
             Type::Path(path) => path,
             _ => continue,
@@ -220,20 +217,23 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         all_reexport_types.extend(reexport_types);
 
-        let op_fn: TokenStream = quote! {
+        let default_ret = if auto_ok.contains(&name) {
+            quote!(std::result::Result::Ok(0))
+        } else {
+            quote!(std::result::Result::Err(-38))
+        };
+
+        let op_fn = quote! {
             fn #name (&mut self, #new_inputs) -> std::result::Result<i32, i32> {
-                std::result::Result::Err(-38)
+                #default_ret
             }
-        }
-        .into();
-        let raw_op_fn: TokenStream = quote! {
+        };
+        let raw_op_fn = quote! {
             #unsafety #abi fn #name (#inputs) #output {
                 #conversion
 
-                println!("HELLO {}", stringify!(#name));
-
                 let out = FileSystem::#name(
-                    ((*fuse_get_context()).private_data as *mut Self).as_mut().unwrap(),
+                    ((*fuse_get_context()).private_data as *mut Self).as_mut().expect("Corrupted context"),
                     #converted_call
                 );
 
@@ -242,8 +242,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     Err(e) => e,
                 }
             }
-        }
-        .into();
+        };
 
         trait_fns.extend([op_fn]);
         raw_trait_fns.extend([raw_op_fn]);
@@ -255,7 +254,26 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let op_assignments: Punctuated<Stmt, Semi> = op_assignments.into_iter().collect();
-    let fuse_main = quote! {
+
+    let primitive_idents = [
+        "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
+    ];
+
+    let reexport_list: Punctuated<Type, Comma> = all_reexport_types
+        .into_iter()
+        .filter_map(|s| (!primitive_idents.contains(&s.as_ref())).then(|| syn::parse::<Type>(s.parse().unwrap()).unwrap()))
+        .collect();
+
+    quote! {
+        #[allow(unused_variables)]
+        pub trait FileSystem: Sized {
+            #trait_fns
+        }
+        pub trait FileSystemRaw: FileSystem {
+            #raw_trait_fns
+        }
+        impl<F: FileSystem> FileSystemRaw for F {}
+        
         pub trait FuseMain: FileSystemRaw + 'static {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32>;
         }
@@ -286,19 +304,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
         }
-    };
 
-    for primitive_ident in [
-        "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
-    ] {
-        all_reexport_types.remove(primitive_ident);
-    }
-
-    let reexport_list: Punctuated<Type, Comma> = all_reexport_types
-        .into_iter()
-        .map(|s| syn::parse::<Type>(s.parse().unwrap()).unwrap())
-        .collect();
-    let prelude = quote! {
         pub mod prelude {
             pub use crate::{
                 FileSystem,
@@ -306,18 +312,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 #reexport_list
             };
         }
-    };
-
-    let traits: TokenStream = format!(
-        "pub trait FileSystem: Sized {{ {trait_fns} }} 
-        pub trait FileSystemRaw: FileSystem {{ {raw_trait_fns} }} 
-        impl<F: FileSystem> FileSystemRaw for F {{}}
-        {fuse_main}
-        {prelude}"
-    )
-    .parse()
-    .unwrap();
-
-    out.extend([traits]);
-    out
+    
+        #out
+    }.into()
 }

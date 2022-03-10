@@ -1,26 +1,24 @@
 use filesystem_macro::fuse_main;
 use fuse_rs::*;
+use fuse_sys::{FuseMain, FileSystem, stat};
 use std::{env, fs, process};
 
-pub struct Passthrough<T>(T);
+pub struct Passthrough;
 
-#[fuse_main]
-impl<T> Into<u8> for Passthrough<T> {
-    fn into(self) -> u8 {
-        todo!()
+impl FileSystem for Passthrough {
+    fn getattr(&mut self, arg1: &str, _arg2: Option<&mut stat>) -> Result<(), i32> {
+        println!("GET ATTR {arg1}");
+        Ok(())
     }
 }
 
 fn main() {
-    let a: u8 = Passthrough(1).into();
-    // let path = format!("/tmp/fsmnt{}", process::id());
-    // fs::create_dir(&path).unwrap();
+    let path = format!("/tmp/fsmnt{}", process::id());
+    fs::create_dir(&path).unwrap();
 
-    // println!("Mouning to {path}...");
+    println!("Mouning to {path}...");
 
-    // run_filesystem(
-    //     Passthrough,
-    //     &[&env::args().next().unwrap(), &path, "-s", "-f"],
-    // )
-    // .unwrap();
+    let fs = Passthrough;
+
+    fs.run(&[&env::args().next().unwrap(), &path, "-f", "-s"]).unwrap();
 }

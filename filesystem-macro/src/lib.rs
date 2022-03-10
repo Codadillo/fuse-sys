@@ -221,6 +221,10 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let op_assignments: Punctuated<Stmt, Semi> = op_assignments.into_iter().collect();
     let fuse_main = quote! {
         pub trait FuseMain: FileSystemRaw + 'static {
+            fn run(self, fuse_args: &[&str]) -> Result<(), i32>;
+        }
+        
+        impl<F: FileSystemRaw + 'static> FuseMain for F {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32> {
                 let mut operations = crate::fuse_operations::default();
                 #op_assignments
@@ -249,7 +253,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let traits: TokenStream = format!(
-        "pub trait FileSystem: Sized {{ {trait_fns} }} pub trait FileSystemRaw: FileSystem {{ {raw_trait_fns} }} {fuse_main}"
+        "pub trait FileSystem: Sized {{ {trait_fns} }} pub trait FileSystemRaw: FileSystem {{ {raw_trait_fns} }} impl<F: FileSystem> FileSystemRaw for F {{}} {fuse_main}"
     )
     .parse()
     .unwrap();

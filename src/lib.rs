@@ -5,13 +5,3 @@ use std::{
     time::Duration,
 };
 
-use fuse_sys::*;
-use std::mem;
-
-pub mod __private {
-    pub use fuse_sys::fuse_operations;
-}
-
-pub trait FuseMain {
-    fn run(fuse_args: &[&str]) -> Result<(), i32>;
-}

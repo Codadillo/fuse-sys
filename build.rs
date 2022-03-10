@@ -1,6 +1,8 @@
 use std::{env, path::PathBuf};
 
 fn main() {
+    // When building with fuse3, we get an outdated version warning message
+    // and (*fuse_get_conext()).private_data gets mangled
     println!("cargo:rustc-link-lib=fuse");
 
     let bindings = bindgen::Builder::default()

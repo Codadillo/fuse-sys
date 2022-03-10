@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use proc_macro::TokenStream;
 
-use quote::quote;
 use proc_macro2::TokenStream as TokenStream2;
+use quote::quote;
 use syn::{
     parse::Parser,
     parse_macro_input,
@@ -261,7 +261,10 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let reexport_list: Punctuated<Type, Comma> = all_reexport_types
         .into_iter()
-        .filter_map(|s| (!primitive_idents.contains(&s.as_ref())).then(|| syn::parse::<Type>(s.parse().unwrap()).unwrap()))
+        .filter_map(|s| {
+            (!primitive_idents.contains(&s.as_ref()))
+                .then(|| syn::parse::<Type>(s.parse().unwrap()).unwrap())
+        })
         .collect();
 
     quote! {
@@ -273,7 +276,7 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
             #raw_trait_fns
         }
         impl<F: FileSystem> FileSystemRaw for F {}
-        
+
         pub trait FuseMain: FileSystemRaw + 'static {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32>;
         }
@@ -312,7 +315,7 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #reexport_list
             };
         }
-    
+
         #out
     }.into()
 }

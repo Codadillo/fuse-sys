@@ -125,6 +125,14 @@ impl UnsafeFnConvert {
 
                     ty
                 }
+
+                Type::Path(path) => {
+                    if let Some(ident) = path.path.get_ident() {
+                        reexport_types.insert(ident.to_string());
+                    }
+                    Type::Path(path)
+                }
+
                 ty => ty,
             };
 

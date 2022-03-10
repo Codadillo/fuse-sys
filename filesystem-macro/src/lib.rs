@@ -7,8 +7,8 @@ use syn::{
     parse_macro_input,
     punctuated::Punctuated,
     token::{Comma, Semi},
-    BareFnArg, Expr, Fields, GenericArgument, Ident, ItemImpl, ItemStruct, PathArguments,
-    ReturnType, Stmt, Type, TypeBareFn, TypePtr,
+    BareFnArg, Expr, Fields, GenericArgument, Ident, ItemStruct, PathArguments, ReturnType, Stmt,
+    Type, TypeBareFn, TypePtr,
 };
 
 fn is_ident(ty: &Type, ident: &str) -> bool {
@@ -159,12 +159,22 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => unimplemented!(),
     };
 
+    let op_whitelist = [
+        "chmod", "create", "fsync", "getattr", "mkdir", "mknod", "open", "read", "readlink",
+        "readdir", "release", "rename", "rmdir", "statfs", "truncate", "unlink", "utimens",
+        "write",
+    ];
+
     let mut raw_trait_fns = TokenStream::new();
     let mut trait_fns = TokenStream::new();
     let mut op_assignments: Vec<Stmt> = vec![];
     let mut all_reexport_types = HashSet::new();
 
     for field in fields {
+        if !op_whitelist.contains(&field.ident.as_ref().unwrap().to_string().as_str()) {
+            continue;
+        }
+
         let ty_path = match field.ty {
             Type::Path(path) => path,
             _ => continue,
@@ -211,7 +221,7 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
         all_reexport_types.extend(reexport_types);
 
         let op_fn: TokenStream = quote! {
-            fn #name (&mut self, #new_inputs) -> std::result::Result<(), i32> {
+            fn #name (&mut self, #new_inputs) -> std::result::Result<i32, i32> {
                 std::result::Result::Err(-38)
             }
         }
@@ -220,13 +230,15 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #unsafety #abi fn #name (#inputs) #output {
                 #conversion
 
+                println!("HELLO {}", stringify!(#name));
+
                 let out = FileSystem::#name(
                     ((*fuse_get_context()).private_data as *mut Self).as_mut().unwrap(),
                     #converted_call
                 );
 
                 match out {
-                    Ok(()) => 0,
+                    Ok(o) => o,
                     Err(e) => e,
                 }
             }
@@ -307,30 +319,5 @@ pub fn fuse_operations(_attr: TokenStream, item: TokenStream) -> TokenStream {
     .unwrap();
 
     out.extend([traits]);
-    out
-}
-
-#[proc_macro_attribute]
-pub fn fuse_main(attr: TokenStream, item: TokenStream) -> TokenStream {
-    assert!(attr.is_empty(), "Expected no attributes");
-
-    let mut out = item.clone();
-    let tokens = parse_macro_input!(item as ItemImpl);
-
-    let generics = tokens.generics;
-    let ty = tokens.self_ty;
-
-    let fuse_main_impl: TokenStream = quote! {
-        impl #generics fuse_rs::FuseMain for #ty {
-            fn run(fuse_args: &[&str]) -> Result<(), i32> {
-                let mut operations = fuse_rs::__private::fuse_operations::default();
-
-                todo!()
-            }
-        }
-    }
-    .into();
-
-    out.extend([fuse_main_impl]);
     out
 }

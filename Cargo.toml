@@ -13,6 +13,9 @@ members = [
 [dependencies]
 filesystem-macro = { path = "filesystem-macro", optional = true }
 
+[dev-dependencies]
+libc = "0.2.119"
+
 [build-dependencies]
 bindgen = "*"
 

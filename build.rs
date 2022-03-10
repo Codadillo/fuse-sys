@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf};
 
 fn main() {
-    println!("cargo:rustc-link-lib=fuse3");
+    println!("cargo:rustc-link-lib=fuse");
 
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")

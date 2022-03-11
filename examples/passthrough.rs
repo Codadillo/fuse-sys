@@ -1,3 +1,4 @@
+use clap::StructOpt;
 use fuse_sys::prelude::*;
 use nix::sys::stat as nixstat;
 use std::{
@@ -178,9 +179,27 @@ impl FileSystem for Passthrough {
     }
 }
 
+#[derive(clap::Parser)]
+struct Args {
+    /// The path of filesystem's mount
+    #[clap(short, long, default_value = "/tmp/fsmnt")]
+    mount: String,
+    /// The directory that backs mount
+    #[clap(short = 'a', long, default_value = "/tmp/fsdata")]
+    data: String,
+    /// Whether or not to run fuse in debug mode
+    #[clap(short, long)]
+    debug: bool,
+}
+
 fn main() {
-    let mount = "/tmp/fsmnt";
-    let data = "/tmp/fsdata";
+    let bin = env::args().next().unwrap();
+    let Args { mount, data, debug } = Args::parse();
+
+    let mut fuse_args: Vec<&str> = vec![&bin, &mount, "-f", "-s"];
+    if debug {
+        fuse_args.push("-d");
+    }
 
     match read_dir(&mount) {
         Err(e) if e.kind() == ErrorKind::NotFound => create_dir(&mount).unwrap(),
@@ -196,9 +215,5 @@ fn main() {
     }
 
     println!("Mounting {mount} as mirror of {data}...");
-
-    let fs = Passthrough::new(data.to_owned());
-
-    let bin = &env::args().next().unwrap();
-    fs.run(&[bin, &mount, "-f", "-s"]).unwrap();
+    Passthrough::new(data.to_owned()).run(&fuse_args).unwrap();
 }

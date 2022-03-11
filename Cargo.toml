@@ -16,6 +16,7 @@ filesystem-macro = { path = "filesystem-macro", optional = true }
 [dev-dependencies]
 nix = "0.23.1"
 fuse-sys = { path = ".", features = ["auto"] }
+clap = { version = "3.1.6", features = ["derive"] }
 
 [build-dependencies]
 bindgen = "*"

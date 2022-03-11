@@ -272,10 +272,10 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
                 );
 
                 let #out_ident = match #out_ident {
-                    Ok(o) => o,
-                    Err(e) => match e.raw_os_error() {
-                        Some(os) => -os,
-                        None => {
+                    std::io::Result::Ok(o) => o,
+                    std::io::Result::Err(e) => match e.raw_os_error() {
+                        std::option::Option::Some(os) => -os,
+                        std::option::Option::None => {
                             eprintln!("Unrecognized error in {}: {:?}", stringify!(#name), e);
                             -131
                         }

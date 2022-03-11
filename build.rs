@@ -27,12 +27,13 @@ fn main() {
             .expect("Could not find struct fuse_operations");
 
         // The attributes on the fuse_operations macro correspond
-        // to the fuse operations that should by default return Ok (0)
-        // instead of Not Supported (-38)
-        // See https://github.com/libfuse/libfuse/blob/48ae2e72b39b6a31cb2194f6f11786b7ca06aac6/include/fuse.h#L1135
+        // to the fuse operations that are blacklisted
+        // for versioning issues. In theory these operations
+        // shouldn't show up on the struct at all, but whatever
+        // I'm not mad or anything like that's totally fine I'm fine.
         bindings_raw.insert_str(
             operations_loc,
-            "#[filesystem_macro::fuse_operations[open, release, opendir, releasedir, statfs]]\n",
+            "#[filesystem_macro::fuse_operations[getdir, utime]]\n",
         );
 
         fs::write(out, bindings_raw).unwrap();

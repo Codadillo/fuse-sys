@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use proc_macro::TokenStream;
-
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
@@ -13,12 +12,27 @@ use syn::{
     Type, TypeBareFn, TypePtr,
 };
 
+const IDENT_CHARS: &'static str = "_qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM";
+const PRIMITIVE_IDENTS: &'static [&'static str] = &[
+    "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
+];
+
+fn gen_ident(base: &str) -> Ident {
+    syn::parse(
+        format!("{base}{}", random_string::generate(10, IDENT_CHARS))
+            .parse::<TokenStream>()
+            .unwrap(),
+    )
+    .unwrap()
+}
+
 fn is_ident(ty: &Type, ident: &str) -> bool {
     matches!(ty, Type::Path(path) if path.path.segments.last().unwrap().ident.to_string() == ident)
 }
 
 struct UnsafeFnConvert {
     new_inputs: Punctuated<BareFnArg, Comma>,
+    unconverted_call: Punctuated<Expr, Comma>,
     converted_call: Punctuated<Expr, Comma>,
     conversion: Punctuated<Stmt, Semi>,
     reexport_types: HashSet<String>,
@@ -45,6 +59,7 @@ impl UnsafeFnConvert {
     fn new(inputs: Punctuated<BareFnArg, Comma>) -> Self {
         let mut reexport_types = HashSet::new();
         let mut new_inputs = Punctuated::new();
+        let mut unconverted_call = Punctuated::new();
         let mut converted_call = Punctuated::new();
         let mut conversions: Vec<Stmt> = vec![];
 
@@ -57,6 +72,11 @@ impl UnsafeFnConvert {
             let size_ident = next.map(|n| n.name.unwrap().0);
 
             let ident = arg.name.unwrap().0;
+            let new_ident = gen_ident(&ident.to_string());
+
+            unconverted_call.push(syn::parse(quote!(#ident).into()).unwrap());
+            converted_call.push(syn::parse(quote!(#new_ident).into()).unwrap());
+
             let new_ty: Type = match arg.ty {
                 Type::Ptr(TypePtr {
                     mutability,
@@ -69,6 +89,8 @@ impl UnsafeFnConvert {
 
                     inputs.next();
                     let size_ident = size_ident.unwrap();
+                    unconverted_call.push(syn::parse(quote!(#size_ident).into()).unwrap());
+
                     let slice_from: Ident = syn::parse(
                         if mutability.is_none() {
                             quote!(from_raw_parts)
@@ -80,7 +102,7 @@ impl UnsafeFnConvert {
                     .unwrap();
 
                     conversions.push(
-                        syn::parse(quote!(let #ident = std::slice::#slice_from (#ident as * #const_token #mutability #sub_ty, #size_ident as usize);).into()
+                        syn::parse(quote!(let #new_ident = std::slice::#slice_from (#ident as * #const_token #mutability #sub_ty, #size_ident as usize);).into()
                     ).unwrap());
                     ty
                 }
@@ -93,7 +115,7 @@ impl UnsafeFnConvert {
                     let ty = syn::parse(quote!(&str).into()).unwrap();
                     conversions.push(
                         syn::parse(
-                            quote!(let #ident = std::ffi::CStr::from_ptr(#ident).to_str().unwrap();)
+                            quote!(let #new_ident = std::ffi::CStr::from_ptr(#ident).to_str().unwrap();)
                                 .into(),
                         )
                         .unwrap(),
@@ -122,7 +144,7 @@ impl UnsafeFnConvert {
                     .unwrap();
 
                     conversions.push(
-                        syn::parse(quote!(let #ident = #ident . #ref_from ();).into()).unwrap(),
+                        syn::parse(quote!(let #new_ident = #ident . #ref_from ();).into()).unwrap(),
                     );
 
                     ty
@@ -132,18 +154,22 @@ impl UnsafeFnConvert {
                     if let Some(ident) = path.path.get_ident() {
                         reexport_types.insert(ident.to_string());
                     }
+                    conversions.push(syn::parse(quote!(let #new_ident = #ident;).into()).unwrap());
                     Type::Path(path)
                 }
 
-                ty => ty,
+                ty => {
+                    conversions.push(syn::parse(quote!(let #new_ident = #ident;).into()).unwrap());
+                    ty
+                }
             };
 
             new_inputs.push(syn::parse(quote!(#ident: #new_ty).into()).unwrap());
-            converted_call.push(syn::parse(quote!(#ident).into()).unwrap());
         }
 
         Self {
             new_inputs,
+            unconverted_call,
             converted_call,
             reexport_types,
             conversion: conversions.into_iter().collect(),
@@ -153,7 +179,7 @@ impl UnsafeFnConvert {
 
 #[proc_macro_attribute]
 pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let auto_ok = Punctuated::<Ident, Comma>::parse_terminated
+    let blacklist = Punctuated::<Ident, Comma>::parse_terminated
         .parse(attr)
         .map(|p| p.into_iter().collect::<Vec<_>>())
         .unwrap();
@@ -172,6 +198,12 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut all_reexport_types = HashSet::new();
 
     for field in fields {
+        let name = field.ident.unwrap();
+
+        if blacklist.contains(&name) {
+            continue;
+        }
+
         let ty_path = match field.ty {
             Type::Path(path) => path,
             _ => continue,
@@ -207,9 +239,9 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
             continue;
         }
 
-        let name = field.ident.unwrap();
         let UnsafeFnConvert {
             new_inputs,
+            unconverted_call,
             converted_call,
             reexport_types,
             conversion,
@@ -217,29 +249,54 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         all_reexport_types.extend(reexport_types);
 
-        let default_ret = if auto_ok.contains(&name) {
-            quote!(std::result::Result::Ok(0))
-        } else {
-            quote!(std::result::Result::Err(-38))
-        };
+        let private_data_ident = gen_ident("private");
+        let dummy_fs_ident = gen_ident("dummy_fs");
+        let out_ident = gen_ident("out");
+
+        let fuse_fs_name: TokenStream2 = format!("crate::fuse_fs_{name}").parse().unwrap();
 
         let op_fn = quote! {
-            fn #name (&mut self, #new_inputs) -> std::result::Result<i32, i32> {
-                #default_ret
+            fn #name (&mut self, #new_inputs) -> std::io::Result<i32> {
+                std::io::Result::Err(std::io::Error::from_raw_os_error(38))
             }
         };
         let raw_op_fn = quote! {
             #unsafety #abi fn #name (#inputs) #output {
                 #conversion
 
-                let out = FileSystem::#name(
-                    ((*fuse_get_context()).private_data as *mut Self).as_mut().expect("Corrupted context"),
+                let mut #private_data_ident = UserData::<Self>::from_raw((*fuse_get_context()).private_data);
+
+                let #out_ident = FileSystem::#name(
+                    &mut #private_data_ident.this,
                     #converted_call
                 );
 
-                match out {
+                let #out_ident = match #out_ident {
                     Ok(o) => o,
-                    Err(e) => e,
+                    Err(e) => match e.raw_os_error() {
+                        Some(os) => -os,
+                        None => {
+                            eprintln!("Unrecognized error in {}: {:?}", stringify!(#name), e);
+                            -131
+                        }
+                    }
+                };
+
+                if #out_ident == -38 {
+                    #private_data_ident.ops.as_mut().unwrap().#name = None;
+
+                    let #dummy_fs_ident = crate::fuse_fs_new(
+                        #private_data_ident.ops,
+                        std::mem::size_of::<crate::fuse_operations>() as crate::size_t,
+                        #private_data_ident as *mut _ as *mut std::ffi::c_void,
+                    );
+
+                    let out = #fuse_fs_name(#dummy_fs_ident, #unconverted_call);
+
+                    crate::fuse_fs_destroy(#dummy_fs_ident);
+                    out
+                } else {
+                    #out_ident
                 }
             }
         };
@@ -255,14 +312,10 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let op_assignments: Punctuated<Stmt, Semi> = op_assignments.into_iter().collect();
 
-    let primitive_idents = [
-        "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
-    ];
-
     let reexport_list: Punctuated<Type, Comma> = all_reexport_types
         .into_iter()
         .filter_map(|s| {
-            (!primitive_idents.contains(&s.as_ref()))
+            (!PRIMITIVE_IDENTS.contains(&s.as_ref()))
                 .then(|| syn::parse::<Type>(s.parse().unwrap()).unwrap())
         })
         .collect();
@@ -281,12 +334,33 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32>;
         }
 
+        struct UserData<T> {
+            ops: *mut crate::fuse_operations,
+            this: T,
+        }
+
+        impl<T> UserData<T> {
+            fn new(ops: *mut crate::fuse_operations, this: T) -> Self {
+                Self {
+                    ops,
+                    this,
+                }
+            }
+
+            unsafe fn from_raw<'a>(raw: *mut std::ffi::c_void) -> &'a mut Self {
+                (raw as *mut Self).as_mut().expect("Mangled UserData")
+            }
+        }
+
         impl<F: FileSystemRaw + 'static> FuseMain for F {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32> {
                 let mut operations = crate::fuse_operations::default();
                 #op_assignments
 
-                let mut this = std::boxed::Box::new(self);
+                let mut user_data = UserData::new(
+                    &mut operations as *mut crate::fuse_operations,
+                    self
+                );
 
                 let mut args_owned: std::vec::Vec<_> = fuse_args.into_iter().map(|s| std::ffi::CString::new(*s).unwrap()).collect();
                 let mut args: std::vec::Vec<_> = args_owned.iter_mut().map(|cs| cs.as_ptr()).collect();
@@ -297,7 +371,8 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
                         args.as_mut_ptr() as *mut *mut std::os::raw::c_char,
                         &operations as *const crate::fuse_operations,
                         std::mem::size_of::<crate::fuse_operations>() as crate::size_t,
-                        this.as_mut() as *mut Self as *mut std::ffi::c_void,
+                        &mut user_data as *mut _ as *mut std::ffi::c_void,
+                        // 0 as *mut std::ffi::c_void,
                     )
                 };
 

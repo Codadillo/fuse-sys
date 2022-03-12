@@ -3,7 +3,6 @@ use fuse_sys::prelude::*;
 use nix::sys::stat as nixstat;
 use std::{
     env,
-    ffi::CString,
     fs::*,
     io::{ErrorKind, Result},
     os::{raw::c_void, unix::fs::*},
@@ -100,14 +99,14 @@ impl FileSystem for Passthrough {
         &mut self,
         path: &str,
         buf: Option<&mut c_void>,
-        filler: fuse_fill_dir_t,
+        filler: impl Fn(Option<&mut std::ffi::c_void>, &str, &stat, off_t) -> i32,
         _off: off_t,
         _info: Option<&mut fuse_file_info>,
     ) -> Result<i32> {
-        let filler = filler.unwrap();
-        let buf = buf
-            .map(|buf| buf as *mut c_void)
-            .unwrap_or(0 as *mut c_void);
+        let buf = match buf {
+            Some(buf) => buf,
+            None => return Ok(0),
+        };
 
         for entry in read_dir(self.source(path))? {
             let entry = entry?;
@@ -117,11 +116,8 @@ impl FileSystem for Passthrough {
                 ..Default::default()
             };
 
-            let name_raw = CString::new(entry.file_name().to_str().unwrap()).unwrap();
-            unsafe {
-                if filler(buf, name_raw.as_ptr(), &stat as *const stat, 0) != 0 {
-                    break;
-                }
+            if filler(Some(buf), entry.file_name().to_str().unwrap(), &stat, 0) != 0 {
+                break;
             }
         }
 

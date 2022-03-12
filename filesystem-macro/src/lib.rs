@@ -352,7 +352,7 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
         impl<F: FileSystem> FileSystemRaw for F {}
 
-        pub trait FuseMain: FileSystemRaw + 'static {
+        pub trait FuseMain: FileSystemRaw + Send + Sync + 'static {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32>;
         }
 
@@ -374,7 +374,7 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
-        impl<F: FileSystemRaw + 'static> FuseMain for F {
+        impl<F: FileSystemRaw + Send + Sync + 'static> FuseMain for F {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32> {
                 let mut operations = crate::fuse_operations::default();
                 #op_assignments

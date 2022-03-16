@@ -374,10 +374,10 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
         pub trait FileSystemRaw<const UNTHREADED: bool> {
             #raw_trait_fn_sigs
         }
-        impl<F: UnthreadedFileSystem> FileSystemRaw<false> for F {
+        impl<F: UnthreadedFileSystem> FileSystemRaw<true> for F {
             #raw_unthreaded_fns
         }
-        impl<F: FileSystem + Send + Sync> FileSystemRaw<true> for F {
+        impl<F: FileSystem + Send + Sync> FileSystemRaw<false> for F {
             #raw_threaded_fns
         }
 

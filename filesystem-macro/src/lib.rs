@@ -214,8 +214,14 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => unimplemented!(),
     };
 
-    let mut raw_trait_fns = TokenStream2::new();
-    let mut trait_fns = TokenStream2::new();
+    let mut raw_unthreaded_fns = TokenStream2::new();
+    let mut raw_threaded_fns = TokenStream2::new();
+
+    let mut raw_trait_fn_sigs = TokenStream2::new();
+
+    let mut unthreaded_fns = TokenStream2::new();
+    let mut threaded_fns = TokenStream2::new();
+
     let mut op_assignments: Vec<Stmt> = vec![];
     let mut all_reexport_types = HashSet::new();
 
@@ -271,63 +277,77 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         all_reexport_types.extend(reexport_types);
 
+        let dummy_private_data_ident = gen_ident("dummy_private");
         let private_data_ident = gen_ident("private");
         let dummy_fs_ident = gen_ident("dummy_fs");
         let out_ident = gen_ident("out");
 
         let fuse_fs_name: TokenStream2 = format!("crate::fuse_fs_{name}").parse().unwrap();
 
-        let op_fn = quote! {
+        unthreaded_fns.extend([quote! {
             fn #name (&mut self, #new_inputs) -> std::io::Result<i32> {
                 std::io::Result::Err(std::io::Error::from_raw_os_error(38))
             }
-        };
-        let raw_op_fn = quote! {
-            #unsafety #abi fn #name (#inputs) #output {
-                #conversion
+        }]);
+        threaded_fns.extend([quote! {
+            fn #name (&self, #new_inputs) -> std::io::Result<i32> {
+                std::io::Result::Err(std::io::Error::from_raw_os_error(38))
+            }
+        }]);
+    
+        raw_trait_fn_sigs.extend([quote! {
+            #unsafety #abi fn #name (#inputs) #output;
+        }]);
+    
+        for (stream, convert_ptr) in [(&mut raw_threaded_fns, quote!(as_ref)), (&mut raw_unthreaded_fns, quote!(as_mut))] {
+            stream.extend([quote! {
+                #unsafety #abi fn #name (#inputs) #output {
+                    #conversion
 
-                let mut #private_data_ident = UserData::<Self>::from_raw((*fuse_get_context()).private_data);
+                    let mut #private_data_ident = UserData::<Self>::from_raw((*fuse_get_context()).private_data);
 
-                let #out_ident = FileSystem::#name(
-                    &mut #private_data_ident.this,
-                    #converted_call
-                );
-
-                let #out_ident = match #out_ident {
-                    std::io::Result::Ok(o) => o,
-                    std::io::Result::Err(e) => match e.raw_os_error() {
-                        std::option::Option::Some(os) => -os,
-                        std::option::Option::None => {
-                            eprintln!("Unrecognized error in {}: {:?}", stringify!(#name), e);
-                            -131
-                        }
-                    }
-                };
-
-                if #out_ident == -38 {
-                    #private_data_ident.ops.as_mut().unwrap().#name = None;
-
-                    let #dummy_fs_ident = crate::fuse_fs_new(
-                        #private_data_ident.ops,
-                        std::mem::size_of::<crate::fuse_operations>() as crate::size_t,
-                        #private_data_ident as *mut _ as *mut std::ffi::c_void,
+                    let #out_ident = Self::#name(
+                        #private_data_ident.this.#convert_ptr().expect("Private data mangled"),
+                        #converted_call
                     );
 
-                    let out = #fuse_fs_name(#dummy_fs_ident, #unconverted_call);
+                    let #out_ident = match #out_ident {
+                        std::io::Result::Ok(o) => o,
+                        std::io::Result::Err(e) => match e.raw_os_error() {
+                            std::option::Option::Some(os) => -os,
+                            std::option::Option::None => {
+                                eprintln!("Unrecognized error in {}: {:?}", stringify!(#name), e);
+                                -131
+                            }
+                        }
+                    };
 
-                    crate::fuse_fs_destroy(#dummy_fs_ident);
-                    out
-                } else {
-                    #out_ident
+                    if #out_ident == -38 {
+                        let mut #dummy_private_data_ident = {
+                            let mut ops = #private_data_ident.ops.clone();
+                            ops.#name = None;
+                            UserData::new(ops, #private_data_ident.this)
+                        };
+                
+                        let #dummy_fs_ident = crate::fuse_fs_new(
+                            &#dummy_private_data_ident.ops as *const _,
+                            std::mem::size_of::<crate::fuse_operations>() as crate::size_t,
+                            &mut #dummy_private_data_ident as *mut _ as *mut std::ffi::c_void,
+                        );
+
+                        let out = #fuse_fs_name(#dummy_fs_ident, #unconverted_call);
+
+                        crate::fuse_fs_destroy(#dummy_fs_ident);
+                        out
+                    } else {
+                        #out_ident
+                    }
                 }
-            }
-        };
-
-        trait_fns.extend([op_fn]);
-        raw_trait_fns.extend([raw_op_fn]);
+            }]);
+        }
 
         op_assignments.push(
-            syn::parse(quote!(operations.#name = Some(<Self as FileSystemRaw>::#name);).into())
+            syn::parse(quote!(operations.#name = Some(Self::#name);).into())
                 .unwrap(),
         );
     }
@@ -344,47 +364,62 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     quote! {
         #[allow(unused_variables)]
+        pub trait UnthreadedFileSystem: Sized {
+            #unthreaded_fns
+        }
         pub trait FileSystem: Sized {
-            #trait_fns
+            #threaded_fns
         }
-        pub trait FileSystemRaw: FileSystem {
-            #raw_trait_fns
-        }
-        impl<F: FileSystem> FileSystemRaw for F {}
 
-        pub trait FuseMain: FileSystemRaw + Send + Sync + 'static {
+        pub trait FileSystemRaw<const UNTHREADED: bool> {
+            #raw_trait_fn_sigs
+        }
+        impl<F: UnthreadedFileSystem> FileSystemRaw<false> for F {
+            #raw_unthreaded_fns
+        }
+        impl<F: FileSystem + Send + Sync> FileSystemRaw<true> for F {
+            #raw_threaded_fns
+        }
+
+        pub trait FuseMain<const UNTHREADED: bool>: FileSystemRaw<UNTHREADED> + 'static {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32>;
         }
 
         struct UserData<T> {
-            ops: *mut crate::fuse_operations,
-            this: T,
+            ops: crate::fuse_operations,
+            this: *mut T,
         }
 
         impl<T> UserData<T> {
-            fn new(ops: *mut crate::fuse_operations, this: T) -> Self {
+            fn new(ops: crate::fuse_operations, this: *mut T) -> Self {
                 Self {
                     ops,
                     this,
                 }
             }
 
-            unsafe fn from_raw<'a>(raw: *mut std::ffi::c_void) -> &'a mut Self {
-                (raw as *mut Self).as_mut().expect("Mangled UserData")
+            unsafe fn from_raw<'a>(raw: *mut std::ffi::c_void) -> &'a Self {
+                (raw as *const Self).as_ref().expect("Mangled UserData")
             }
         }
 
-        impl<F: FileSystemRaw + Send + Sync + 'static> FuseMain for F {
+        impl<const UNTHREADED: bool, F: FileSystemRaw<UNTHREADED> + 'static> FuseMain<UNTHREADED> for F {
             fn run(self, fuse_args: &[&str]) -> Result<(), i32> {
                 let mut operations = crate::fuse_operations::default();
                 #op_assignments
 
+                let mut this = self;
                 let mut user_data = UserData::new(
-                    &mut operations as *mut crate::fuse_operations,
-                    self
+                    operations.clone(),
+                    &mut this as *mut _,
                 );
 
                 let mut args_owned: std::vec::Vec<_> = fuse_args.into_iter().map(|s| std::ffi::CString::new(*s).unwrap()).collect();
+            
+                if UNTHREADED {
+                    args_owned.push(std::ffi::CString::new("-s").unwrap());
+                }
+
                 let mut args: std::vec::Vec<_> = args_owned.iter_mut().map(|cs| cs.as_ptr()).collect();
 
                 let out = unsafe {
@@ -394,7 +429,6 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
                         &operations as *const crate::fuse_operations,
                         std::mem::size_of::<crate::fuse_operations>() as crate::size_t,
                         &mut user_data as *mut _ as *mut std::ffi::c_void,
-                        // 0 as *mut std::ffi::c_void,
                     )
                 };
 
@@ -407,6 +441,7 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         pub mod prelude {
             pub use crate::{
+                UnthreadedFileSystem,
                 FileSystem,
                 FuseMain,
                 #reexport_list

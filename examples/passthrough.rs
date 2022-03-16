@@ -22,7 +22,7 @@ impl Passthrough {
     }
 }
 
-impl FileSystem for Passthrough {
+impl UnthreadedFileSystem for Passthrough {
     fn chmod(&mut self, path: &str, mode: mode_t) -> Result<i32> {
         set_permissions(self.source(path), Permissions::from_mode(mode)).map(|_| 0)
     }
@@ -170,8 +170,11 @@ impl FileSystem for Passthrough {
             options.custom_flags(info.flags);
         }
 
-        let f = options.write(true).open(self.source(path))?;
-        f.write_at(buf, off as u64).map(|n| n as i32)
+        options
+            .write(true)
+            .open(self.source(path))?
+            .write_at(buf, off as u64)
+            .map(|n| n as i32)
     }
 }
 

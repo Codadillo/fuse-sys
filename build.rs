@@ -38,9 +38,20 @@ fn main() {
         // for versioning issues. In theory these operations
         // shouldn't show up on the struct at all, but whatever
         // I'm not mad or anything like that's totally fine I'm fine.
+        let mut blacklisted = vec!["getdir, utime"];
+
+        // macOS makes me question my reality.
+        #[cfg(target_os = "macos")]
+        {
+            blacklisted.extend(vec!["reserved00, reserved01"]);
+        }
+
         bindings_raw.insert_str(
             operations_loc,
-            "#[filesystem_macro::fuse_operations[getdir, utime]]\n",
+            &format!(
+                "#[filesystem_macro::fuse_operations[{}]]",
+                blacklisted.join(", ")
+            ),
         );
 
         fs::write(out, bindings_raw).unwrap();

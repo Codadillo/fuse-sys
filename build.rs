@@ -5,7 +5,14 @@ fn main() {
     // and (*fuse_get_conext()).private_data gets mangled
     println!("cargo:rustc-link-lib=fuse");
 
+    let library = pkg_config::probe_library("fuse").expect("pkg-config failed to find fuse");
     let bindings = bindgen::Builder::default()
+        .clang_args(
+            library
+                .include_paths
+                .iter()
+                .map(|path| format!("-I{}", path.to_string_lossy())),
+        )
         .header("wrapper.h")
         .derive_default(true)
         .generate()

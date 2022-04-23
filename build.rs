@@ -43,7 +43,7 @@ fn main() {
         // macOS makes me question my reality.
         #[cfg(target_os = "macos")]
         {
-            blacklisted.extend(vec!["reserved00, reserved01"]);
+            blacklisted.extend(["reserved00, reserved01"]);
         }
 
         bindings_raw.insert_str(

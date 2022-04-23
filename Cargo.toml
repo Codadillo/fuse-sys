@@ -20,6 +20,7 @@ clap = { version = "3.1.6", features = ["derive"] }
 
 [build-dependencies]
 bindgen = "*"
+pkg-config = "0.3.25"
 
 [features]
 auto = ["filesystem-macro"]

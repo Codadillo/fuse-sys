@@ -5,7 +5,14 @@ fn main() {
     // and (*fuse_get_conext()).private_data gets mangled
     println!("cargo:rustc-link-lib=fuse");
 
+    let library = pkg_config::probe_library("fuse").expect("pkg-config failed to find fuse");
     let bindings = bindgen::Builder::default()
+        .clang_args(
+            library
+                .include_paths
+                .iter()
+                .map(|path| format!("-I{}", path.to_string_lossy())),
+        )
         .header("wrapper.h")
         .derive_default(true)
         .generate()
@@ -31,9 +38,20 @@ fn main() {
         // for versioning issues. In theory these operations
         // shouldn't show up on the struct at all, but whatever
         // I'm not mad or anything like that's totally fine I'm fine.
+        let mut blacklisted = vec!["getdir, utime"];
+
+        // macOS makes me question my reality.
+        #[cfg(target_os = "macos")]
+        {
+            blacklisted.extend(["reserved00, reserved01"]);
+        }
+
         bindings_raw.insert_str(
             operations_loc,
-            "#[filesystem_macro::fuse_operations[getdir, utime]]\n",
+            &format!(
+                "#[filesystem_macro::fuse_operations[{}]]",
+                blacklisted.join(", ")
+            ),
         );
 
         fs::write(out, bindings_raw).unwrap();

@@ -24,7 +24,7 @@ impl Passthrough {
 
 impl UnthreadedFileSystem for Passthrough {
     fn chmod(&mut self, path: &str, mode: mode_t) -> Result<i32> {
-        set_permissions(self.source(path), Permissions::from_mode(mode)).map(|_| 0)
+        set_permissions(self.source(path), Permissions::from_mode(mode.into())).map(|_| 0)
     }
 
     fn create(
@@ -41,7 +41,7 @@ impl UnthreadedFileSystem for Passthrough {
         options
             .create(true)
             .append(true)
-            .mode(mode)
+            .mode(mode.into())
             .open(self.source(path))
             .map(|_| 0)
     }
@@ -65,7 +65,7 @@ impl UnthreadedFileSystem for Passthrough {
     fn mkdir(&mut self, path: &str, mode: mode_t) -> Result<i32> {
         let path = self.source(path);
         create_dir(&path)?;
-        set_permissions(path, Permissions::from_mode(mode)).map(|_| 0)
+        set_permissions(path, Permissions::from_mode(mode.into())).map(|_| 0)
     }
 
     fn mknod(&mut self, path: &str, mode: mode_t, dev: dev_t) -> Result<i32> {

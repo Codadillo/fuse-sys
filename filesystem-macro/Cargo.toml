@@ -11,3 +11,6 @@ proc-macro2 = "1.0.36"
 quote = "1.0.15"
 random-string = "1.0.0"
 syn = { version = "1.0.86", features = ["full"] }
+
+[features]
+share_threaded_impl = []

@@ -24,3 +24,4 @@ pkg-config = "^0.3.9"
 
 [features]
 auto = ["filesystem-macro"]
+share_threaded_impl = ["filesystem-macro/share_threaded_impl"]

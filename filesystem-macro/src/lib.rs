@@ -375,6 +375,15 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
+    #[cfg(feature = "share_threaded_impl")]
+    let blanket_impl = quote! {
+        impl<F: FileSystem> UnthreadedFileSystem for F {
+            #blanket_fns
+        }
+    };
+    #[cfg(not(feature = "share_threaded_impl"))]
+    let blanket_impl = quote!();
+
     quote! {
         #[allow(unused_variables)]
         pub trait UnthreadedFileSystem: Sized {
@@ -384,9 +393,7 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
             #threaded_fns
         }
 
-        impl<F: FileSystem> UnthreadedFileSystem for F {
-            #blanket_fns
-        } 
+        #blanket_impl
 
         pub trait FileSystemRaw<const UNTHREADED: bool> {
             #raw_trait_fn_sigs

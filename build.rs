@@ -38,6 +38,7 @@ fn main() {
         // for versioning issues. In theory these operations
         // shouldn't show up on the struct at all, but whatever
         // I'm not mad or anything like that's totally fine I'm fine.
+        #[allow(unused_mut)]
         let mut blacklisted = vec!["getdir, utime"];
 
         // macOS makes me question my reality.

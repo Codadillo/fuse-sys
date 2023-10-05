@@ -14,7 +14,7 @@ use syn::{
 
 const IDENT_CHARS: &'static str = "_qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM";
 const PRIMITIVE_IDENTS: &'static [&'static str] = &[
-    "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
+    "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize"
 ];
 
 fn gen_ident(base: &str) -> Ident {
@@ -34,6 +34,7 @@ struct UnsafeFnConvert {
     new_inputs: Punctuated<BareFnArg, Comma>,
     unconverted_call: Punctuated<Expr, Comma>,
     converted_call: Punctuated<Expr, Comma>,
+    converted_call_unobfuscated: Punctuated<Expr, Comma>,
     conversion: Punctuated<Stmt, Semi>,
     reexport_types: HashSet<String>,
 }
@@ -61,6 +62,7 @@ impl UnsafeFnConvert {
         let mut new_inputs = Punctuated::new();
         let mut unconverted_call = Punctuated::new();
         let mut converted_call = Punctuated::new();
+        let mut converted_call_unobfuscated = Punctuated::new();
         let mut conversions: Vec<Stmt> = vec![];
 
         let mut lookahead = inputs.clone().into_iter().skip(1);
@@ -68,7 +70,7 @@ impl UnsafeFnConvert {
 
         while let Some(arg) = inputs.next() {
             let next = lookahead.next();
-            let sized = matches!(&next, Some(next) if is_ident(&next.ty, "size_t"));
+            let sized = matches!(&next, Some(next) if is_ident(&next.ty, "size_t") || is_ident(&next.ty, "usize"));
             let size_ident = next.map(|n| n.name.unwrap().0);
 
             let ident = arg.name.unwrap().0;
@@ -76,6 +78,7 @@ impl UnsafeFnConvert {
 
             unconverted_call.push(syn::parse(quote!(#ident).into()).unwrap());
             converted_call.push(syn::parse(quote!(#new_ident).into()).unwrap());
+            converted_call_unobfuscated.push(syn::parse(quote!(#ident).into()).unwrap());
 
             let new_ty: Type = match arg.ty {
                 Type::Ptr(TypePtr {
@@ -102,7 +105,7 @@ impl UnsafeFnConvert {
                     .unwrap();
 
                     conversions.push(
-                        syn::parse(quote!(let #new_ident = std::slice::#slice_from (#ident as * #const_token #mutability #sub_ty, #size_ident as usize);).into()
+                        syn::parse(quote!(let #new_ident = std::slice::#slice_from (#ident as * #const_token #mutability #sub_ty, #size_ident as std::primitive::usize);).into()
                     ).unwrap());
                     ty
                 }
@@ -193,6 +196,7 @@ impl UnsafeFnConvert {
             new_inputs,
             unconverted_call,
             converted_call,
+            converted_call_unobfuscated,
             reexport_types,
             conversion: conversions.into_iter().collect(),
         }
@@ -221,6 +225,8 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let mut unthreaded_fns = TokenStream2::new();
     let mut threaded_fns = TokenStream2::new();
+
+    let mut blanket_fns = TokenStream2::new();
 
     let mut op_assignments: Vec<Stmt> = vec![];
     let mut all_reexport_types = HashSet::new();
@@ -271,6 +277,7 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
             new_inputs,
             unconverted_call,
             converted_call,
+            converted_call_unobfuscated,
             reexport_types,
             conversion,
         } = UnsafeFnConvert::new(inputs.clone());
@@ -292,6 +299,12 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
         threaded_fns.extend([quote! {
             fn #name (&self, #new_inputs) -> std::io::Result<i32> {
                 std::io::Result::Err(std::io::Error::from_raw_os_error(38))
+            }
+        }]);
+
+        blanket_fns.extend([quote! {
+            fn #name (&mut self, #new_inputs) -> std::io::Result<i32> {
+                <Self as FileSystem>::#name(self, #converted_call_unobfuscated)
             }
         }]);
     
@@ -331,7 +344,7 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
                 
                         let #dummy_fs_ident = crate::fuse_fs_new(
                             &#dummy_private_data_ident.ops as *const _,
-                            std::mem::size_of::<crate::fuse_operations>() as crate::size_t,
+                            std::mem::size_of::<crate::fuse_operations>() /*as crate::size_t*/,
                             &mut #dummy_private_data_ident as *mut _ as *mut std::ffi::c_void,
                         );
 
@@ -370,6 +383,10 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
         pub trait FileSystem: Sized {
             #threaded_fns
         }
+
+        impl<F: FileSystem> UnthreadedFileSystem for F {
+            #blanket_fns
+        } 
 
         pub trait FileSystemRaw<const UNTHREADED: bool> {
             #raw_trait_fn_sigs
@@ -427,7 +444,7 @@ pub fn fuse_operations(attr: TokenStream, item: TokenStream) -> TokenStream {
                         args.len() as i32,
                         args.as_mut_ptr() as *mut *mut std::os::raw::c_char,
                         &operations as *const crate::fuse_operations,
-                        std::mem::size_of::<crate::fuse_operations>() as crate::size_t,
+                        std::mem::size_of::<crate::fuse_operations>() /*as crate::size_t*/,
                         &mut user_data as *mut _ as *mut std::ffi::c_void,
                     )
                 };
